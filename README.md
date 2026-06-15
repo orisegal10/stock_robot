@@ -79,16 +79,14 @@ Save with `Ctrl+X → Y → Enter`.
 
 ---
 
-### Step 4 — Create a Discord Bot
+### Step 4 — Create a Telegram Bot
 
-1. Go to https://discord.com/developers/applications
-2. Click **New Application** → name it "ORB Bot"
-3. Go to **Bot** → click **Add Bot**
-4. Under **Token** → click **Reset Token** → copy it → paste into `.env` as `DISCORD_TOKEN`
-5. Under **Privileged Gateway Intents** → enable **Message Content Intent** and **Server Members Intent**
-6. Go to **OAuth2 → URL Generator** → check `bot` scope → check permissions: `Send Messages`, `Read Messages`, `Add Reactions`, `Read Message History`
-7. Copy the generated URL → open it in browser → add the bot to your Discord server
-8. In your Discord channel → right-click the channel → **Copy Channel ID** → paste as `DISCORD_CHANNEL_ID` in `.env`
+1. Open Telegram and search for **@BotFather**
+2. Send `/newbot` → choose a name (e.g. `ORB Trading Bot`) and a username (e.g. `orb_myname_bot`)
+3. BotFather replies with a **token** — copy it into `.env` as `TELEGRAM_TOKEN`
+4. Search for **@userinfobot** in Telegram → send `/start` → copy the **Id** number into `.env` as `TELEGRAM_CHAT_ID`
+
+That's it — no developer portal, no permissions setup.
 
 ---
 
@@ -160,17 +158,19 @@ You'll see live status, trade history, log stream, and current config.
 
 ---
 
-### Step 9 — Approve Trades via Discord
+### Step 9 — Approve Trades via Telegram
 
-When the bot detects a valid signal, you'll get a Discord message like:
+When the bot detects a valid signal, you'll get a Telegram message like:
 
 > **📄 PAPER — LONG Signal: MU**
-> Entry: `$192.50` | Stop: `$190.28` | Shares: `78` | Commission est.: `$0.78`
+> Entry: `$192.50` | Stop: `$190.28`
+> Shares: `78` | Commission: `$0.78`
 > OR High: `$191.80` | OR Low: `$189.40`
-> Reason: ORB breakout + retest of 191.80
-> React ✅ to approve or ❌ to skip (timeout: 60s)
+> _ORB breakout + retest of 191.80_
+>
+> [ ✅ Approve ]  [ ❌ Reject ]
 
-React ✅ to place the order. React ❌ or wait 60 seconds to skip it.
+Tap **Approve** to place the order. Tap **Reject** or ignore for 60 seconds to skip.
 
 ---
 
