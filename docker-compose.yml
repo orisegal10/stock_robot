@@ -1,0 +1,47 @@
+version: "3.9"
+
+services:
+  ibgateway:
+    image: ghcr.io/extrange/ibkr:latest
+    restart: unless-stopped
+    environment:
+      IBKR_USERNAME: ${IBKR_USERNAME}
+      IBKR_PASSWORD: ${IBKR_PASSWORD}
+      TRADING_MODE: paper   # change to "live" when ready
+    ports:
+      - "4002:4002"   # IB Gateway paper API port
+      - "4001:4001"   # IB Gateway live API port
+      - "5900:5900"   # VNC for manual access if needed
+    volumes:
+      - ibgateway_data:/root/IBController
+
+  orb-bot:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      - ibgateway
+    env_file:
+      - .env
+    volumes:
+      - ./config.yaml:/app/config.yaml
+      - ./universe:/app/universe
+      - ./logs:/app/logs
+      - ./data:/app/data
+    command: python main.py
+
+  streamlit-ui:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./config.yaml:/app/config.yaml
+      - ./universe:/app/universe
+      - ./logs:/app/logs
+      - ./data:/app/data
+    ports:
+      - "8501:8501"
+    command: streamlit run ui/streamlit_app.py --server.address 0.0.0.0 --server.port 8501
+
+volumes:
+  ibgateway_data:

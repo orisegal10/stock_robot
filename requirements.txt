@@ -1,1 +1,14 @@
+ib_insync>=0.9.86
+pandas>=2.0.0
+numpy>=1.26.0
+pyyaml>=6.0.1
+loguru>=0.7.2
+python-dotenv>=1.0.1
 requests>=2.31.0
+streamlit>=1.38.0
+plotly>=5.22.0
+schedule>=1.2.2
+discord.py>=2.3.2
+aiosqlite>=0.20.0
+pytest>=8.0.0
+pytest-asyncio>=0.23.0

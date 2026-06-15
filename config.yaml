@@ -1,0 +1,58 @@
+# ============================================================
+# ORB Trading Bot — Main Configuration
+# ============================================================
+
+# IBKR Connection
+ibkr:
+  host: "127.0.0.1"
+  port: 4002          # 4002 = IB Gateway paper | 4001 = IB Gateway live
+  client_id: 1
+  paper_trading: true
+
+# Trading Schedule
+trading:
+  start_time: "09:30"
+  end_time: "16:00"
+  trade_dow: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+  update_interval_seconds: 30
+
+# Opening Range
+opening_range:
+  duration_minutes: 5    # OR window: start_time → start_time + duration
+
+# Breakout & Retest
+strategy:
+  breakout_threshold_points: 0.05
+  retest_window_minutes: 15
+  retest_max_candles: 5
+  retest_confirmation_type: "touch"   # "touch" or "close_above"
+
+# Risk Management
+risk:
+  risk_per_trade_percent: 0.75
+  max_daily_loss_percent: 3.0
+  max_open_positions: 4
+  take_profit_strategy: "high_of_day"  # "high_of_day" | "fixed_percent" | "atr_multiple" | "trailing"
+  require_discord_approval: true
+  approval_timeout_seconds: 60
+
+# Global Stock Filters (applied on top of universe.csv)
+filters:
+  min_avg_volume: 500000
+  min_price: 5.0
+  max_price: 500.0
+  volatility_min: 70
+  volatility_max: 110
+  rsi_14_min: 35
+  rsi_14_max: 70
+
+# IBKR Commission (approximate)
+commissions:
+  per_share: 0.005
+  min_per_order: 1.0
+
+# UI & Logging
+ui:
+  show_ui: true
+  daily_log_files: true
+  log_level: "INFO"   # DEBUG | INFO | WARNING | ERROR
