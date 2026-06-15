@@ -1,102 +1,119 @@
 """
-Discord alerts — trade approval requests, notifications, daily report.
+Telegram alerts — trade approval requests, notifications, daily report.
 
-Trade approval flow:
-  1. Bot posts a trade proposal message with ✅ / ❌ reactions.
-  2. User reacts within approval_timeout_seconds.
-  3. approved() returns True/False.
+Approval flow:
+  1. Bot sends a message with ✅ Approve / ❌ Reject inline buttons.
+  2. User taps a button within approval_timeout_seconds.
+  3. request_approval() returns True (approved) or False (rejected/timeout).
 """
 import asyncio
 import os
 from datetime import datetime
 from typing import Optional
 
-import discord
 from loguru import logger
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import TelegramError
 
 from src.config import config
 from src.strategy import Signal
 
+TOKEN = os.getenv("TELEGRAM_TOKEN", "")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 TIMEOUT = config.get("risk", "approval_timeout_seconds", default=60)
-CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID", "0"))
-TOKEN = os.getenv("DISCORD_TOKEN", "")
 
-_client: Optional[discord.Client] = None
-_channel: Optional[discord.TextChannel] = None
+_bot: Optional[Bot] = None
 
 
-async def _get_channel() -> Optional[discord.TextChannel]:
-    global _client, _channel
-    if _channel:
-        return _channel
-    if not TOKEN or not CHANNEL_ID:
-        logger.warning("Discord token or channel ID not set — alerts disabled")
+def _get_bot() -> Optional[Bot]:
+    global _bot
+    if not TOKEN or not CHAT_ID:
+        logger.warning("Telegram TOKEN or CHAT_ID not set — alerts disabled")
         return None
-    if _client is None or _client.is_closed():
-        intents = discord.Intents.default()
-        intents.message_content = True
-        intents.reactions = True
-        _client = discord.Client(intents=intents)
-        await _client.login(TOKEN)
-        await _client.connect()
-    _channel = await _client.fetch_channel(CHANNEL_ID)  # type: ignore
-    return _channel
+    if _bot is None:
+        _bot = Bot(token=TOKEN)
+    return _bot
 
 
 async def request_approval(signal: Signal, shares: int, commission: float) -> bool:
-    """Post trade proposal and wait for ✅/❌ reaction. Returns True if approved."""
+    """Send trade proposal with Approve/Reject buttons. Returns True if approved."""
     if not config.get("risk", "require_discord_approval", default=True):
         return True
 
-    channel = await _get_channel()
-    if channel is None:
-        logger.warning("Discord unavailable — auto-approving trade")
+    bot = _get_bot()
+    if bot is None:
+        logger.warning("Telegram unavailable — auto-approving trade")
         return True
 
     paper = "📄 PAPER" if config.get("ibkr", "paper_trading", default=True) else "💰 LIVE"
-    content = (
-        f"**{paper} — LONG Signal: {signal.symbol}**\n"
-        f"Entry: `${signal.entry_price:.2f}` | Stop: `${signal.stop_price:.2f}` | "
-        f"Shares: `{shares}` | Commission est.: `${commission:.2f}`\n"
+    text = (
+        f"*{paper} — LONG Signal: {signal.symbol}*\n"
+        f"Entry: `${signal.entry_price:.2f}` | Stop: `${signal.stop_price:.2f}`\n"
+        f"Shares: `{shares}` | Commission: `${commission:.2f}`\n"
         f"OR High: `${signal.or_high:.2f}` | OR Low: `${signal.or_low:.2f}`\n"
-        f"Reason: {signal.reason}\n"
-        f"React ✅ to approve or ❌ to skip (timeout: {TIMEOUT}s)"
+        f"_{signal.reason}_\n\n"
+        f"Tap a button within {TIMEOUT}s:"
     )
-    msg = await channel.send(content)
-    await msg.add_reaction("✅")
-    await msg.add_reaction("❌")
 
-    def check(reaction, user):
-        return (
-            not user.bot
-            and reaction.message.id == msg.id
-            and str(reaction.emoji) in ("✅", "❌")
-        )
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Approve", callback_data=f"approve_{signal.symbol}"),
+        InlineKeyboardButton("❌ Reject",  callback_data=f"reject_{signal.symbol}"),
+    ]])
 
     try:
-        reaction, _ = await asyncio.wait_for(
-            _client.wait_for("reaction_add", check=check),
-            timeout=TIMEOUT,
-        )
-        approved = str(reaction.emoji) == "✅"
-        status = "APPROVED" if approved else "REJECTED"
-        await channel.send(f"Trade {signal.symbol} **{status}** by user reaction.")
-        logger.info("Trade {} {} via Discord", signal.symbol, status)
-        return approved
-    except asyncio.TimeoutError:
-        await channel.send(f"⏱ Trade {signal.symbol} **SKIPPED** — no response in {TIMEOUT}s.")
-        logger.warning("Trade {} skipped — Discord approval timed out", signal.symbol)
+        async with bot:
+            msg = await bot.send_message(
+                chat_id=CHAT_ID,
+                text=text,
+                parse_mode="Markdown",
+                reply_markup=keyboard,
+            )
+            msg_id = msg.message_id
+
+            # Poll for callback query from the user
+            offset = None
+            deadline = asyncio.get_event_loop().time() + TIMEOUT
+            while asyncio.get_event_loop().time() < deadline:
+                updates = await bot.get_updates(offset=offset, timeout=5,
+                                                allowed_updates=["callback_query"])
+                for update in updates:
+                    offset = update.update_id + 1
+                    cb = update.callback_query
+                    if cb and cb.message and cb.message.message_id == msg_id:
+                        approved = cb.data.startswith("approve_")
+                        label = "APPROVED ✅" if approved else "REJECTED ❌"
+                        await cb.answer()
+                        await bot.send_message(chat_id=CHAT_ID,
+                                               text=f"Trade *{signal.symbol}* {label}",
+                                               parse_mode="Markdown")
+                        logger.info("Trade {} {} via Telegram", signal.symbol, label)
+                        return approved
+
+            await bot.send_message(chat_id=CHAT_ID,
+                                   text=f"⏱ Trade *{signal.symbol}* skipped — no response in {TIMEOUT}s.",
+                                   parse_mode="Markdown")
+            logger.warning("Trade {} skipped — Telegram approval timed out", signal.symbol)
+            return False
+
+    except TelegramError as exc:
+        logger.error("Telegram error during approval: {}", exc)
         return False
 
 
 async def send_message(text: str) -> None:
-    channel = await _get_channel()
-    if channel:
-        await channel.send(text)
+    bot = _get_bot()
+    if not bot:
+        return
+    try:
+        async with bot:
+            await bot.send_message(chat_id=CHAT_ID, text=text, parse_mode="Markdown")
+    except TelegramError as exc:
+        logger.error("Telegram send_message failed: {}", exc)
 
 
 async def send_daily_report(report: str) -> None:
-    await send_message(f"📊 **Daily Report — {datetime.now().strftime('%Y-%m-%d')}**\n```\n{report}\n```")
+    header = f"📊 *Daily Report — {datetime.now().strftime('%Y-%m-%d')}*\n"
+    await send_message(header + f"```\n{report}\n```")
 
 
 def notify(text: str) -> None:
@@ -108,4 +125,4 @@ def notify(text: str) -> None:
         else:
             loop.run_until_complete(send_message(text))
     except Exception as exc:
-        logger.error("Discord notify failed: {}", exc)
+        logger.error("Telegram notify failed: {}", exc)

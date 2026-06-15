@@ -51,6 +51,10 @@ commissions:
   per_share: 0.005
   min_per_order: 1.0
 
+# Telegram
+telegram:
+  approval_timeout_seconds: 60   # if no reply in 60s, skip the trade
+
 # UI & Logging
 ui:
   show_ui: true
