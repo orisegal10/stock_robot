@@ -1,0 +1,6 @@
+symbol,volatility_hv,stop_loss_pct,atr_14,min_volume,rsi_14,max_position_usd,notes,active
+MU,92,1.15,12.5,8000000,52,15000,Semiconductor,True
+NVTS,88,1.45,1.8,2000000,48,8000,Semiconductor,True
+HOOD,78,1.25,3.2,5000000,55,12000,Fintech,True
+NBIS,82,1.35,8.5,1500000,45,10000,Tech/AI,True
+SMR,95,1.60,0.23,3000000,50,6000,Nuclear,True
