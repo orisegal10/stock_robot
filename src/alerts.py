@@ -1,24 +1,28 @@
 """
-Telegram alerts — trade approval requests, notifications, daily report.
+Telegram alerts — all bot messages go through here and to the log file.
 
-Approval flow:
-  1. Bot sends a message with ✅ Approve / ❌ Reject inline buttons.
-  2. User taps a button within approval_timeout_seconds.
-  3. request_approval() returns True (approved) or False (rejected/timeout).
+Messages sent:
+  - Startup: which stocks we're following
+  - OR captured: high/low for each symbol
+  - Trade approval request (Approve/Reject buttons)
+  - Bought confirmation
+  - Sold confirmation
+  - Day summary
+  - Error / reconnect notices
 """
 import asyncio
 import os
 from datetime import datetime
-from typing import Optional
+from typing import Dict, List, Optional
 
 from loguru import logger
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import TelegramError
 
 from src.config import config
-from src.strategy import Signal
+from src.strategy import Signal, Action
 
-TOKEN = os.getenv("TELEGRAM_TOKEN", "")
+TOKEN   = os.getenv("TELEGRAM_TOKEN", "")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 TIMEOUT = config.get("risk", "approval_timeout_seconds", default=60)
 
@@ -35,8 +39,92 @@ def _get_bot() -> Optional[Bot]:
     return _bot
 
 
+# ------------------------------------------------------------------
+# Core send helper
+# ------------------------------------------------------------------
+
+async def _send(text: str) -> None:
+    bot = _get_bot()
+    if not bot:
+        return
+    try:
+        async with bot:
+            await bot.send_message(chat_id=CHAT_ID, text=text, parse_mode="Markdown")
+    except TelegramError as exc:
+        logger.error("Telegram send failed: {}", exc)
+
+
+def notify(text: str) -> None:
+    """Fire-and-forget from sync context. Also logs the message."""
+    logger.info("[Telegram] {}", text)
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            loop.create_task(_send(text))
+        else:
+            loop.run_until_complete(_send(text))
+    except Exception as exc:
+        logger.error("Telegram notify failed: {}", exc)
+
+
+# ------------------------------------------------------------------
+# Structured messages
+# ------------------------------------------------------------------
+
+def send_startup(symbols: List[str]) -> None:
+    text = (
+        f"🤖 *ORB Bot started* — {datetime.now().strftime('%Y-%m-%d')}\n"
+        f"Following: {', '.join(symbols)}"
+    )
+    notify(text)
+
+
+def send_or_captured(or_data: Dict[str, dict]) -> None:
+    """or_data = {'MU': {'high': 145.3, 'low': 139.6}, ...}"""
+    lines = ["📐 *Opening Range captured:*"]
+    for sym, data in or_data.items():
+        lines.append(f"  {sym} — H: `${data['high']:.2f}`  L: `${data['low']:.2f}`")
+    notify("\n".join(lines))
+
+
+def send_bought(symbol: str, shares: int, price: float,
+                target: float, gain_pct: float) -> None:
+    text = (
+        f"🟢 *Bought {symbol}*\n"
+        f"{shares} share{'s' if shares > 1 else ''} @ `${price:.2f}`\n"
+        f"Target: `${target:.2f}` | Potential gain: `{gain_pct:.1f}%`"
+    )
+    notify(text)
+
+
+def send_sold(symbol: str, shares: int, entry: float,
+              exit_price: float) -> None:
+    pnl = (exit_price - entry) * shares
+    pct = ((exit_price - entry) / entry) * 100
+    emoji = "🏁" if pnl >= 0 else "🔴"
+    text = (
+        f"{emoji} *Sold {symbol}*\n"
+        f"{shares} share{'s' if shares > 1 else ''} @ `${exit_price:.2f}`\n"
+        f"Gained: `${pnl:+.2f}` (`{pct:+.1f}%`)"
+    )
+    notify(text)
+
+
+def send_day_summary(trades: int, net_pnl: float, wins: int) -> None:
+    emoji = "📈" if net_pnl >= 0 else "📉"
+    win_rate = f"{wins}/{trades}" if trades > 0 else "0/0"
+    text = (
+        f"{emoji} *Day Summary — {datetime.now().strftime('%Y-%m-%d')}*\n"
+        f"Trades: `{trades}` | Net P&L: `${net_pnl:+.2f}` | Win rate: `{win_rate}`"
+    )
+    notify(text)
+
+
+# ------------------------------------------------------------------
+# Trade approval (Approve / Reject buttons)
+# ------------------------------------------------------------------
+
 async def request_approval(signal: Signal, shares: int, commission: float) -> bool:
-    """Send trade proposal with Approve/Reject buttons. Returns True if approved."""
     if not config.get("risk", "require_discord_approval", default=True):
         return True
 
@@ -49,10 +137,10 @@ async def request_approval(signal: Signal, shares: int, commission: float) -> bo
     text = (
         f"*{paper} — LONG Signal: {signal.symbol}*\n"
         f"Entry: `${signal.entry_price:.2f}` | Stop: `${signal.stop_price:.2f}`\n"
-        f"Shares: `{shares}` | Commission: `${commission:.2f}`\n"
-        f"OR High: `${signal.or_high:.2f}` | OR Low: `${signal.or_low:.2f}`\n"
+        f"Target: `${signal.target_price:.2f}` | Gain: `{signal.potential_gain_pct:.1f}%`\n"
+        f"Shares: `{shares}` | Commission est.: `${commission:.2f}`\n"
         f"_{signal.reason}_\n\n"
-        f"Tap a button within {TIMEOUT}s:"
+        f"Tap within {TIMEOUT}s:"
     )
 
     keyboard = InlineKeyboardMarkup([[
@@ -60,22 +148,23 @@ async def request_approval(signal: Signal, shares: int, commission: float) -> bo
         InlineKeyboardButton("❌ Reject",  callback_data=f"reject_{signal.symbol}"),
     ]])
 
+    logger.info("[Telegram] Approval request sent for {}", signal.symbol)
+
     try:
         async with bot:
             msg = await bot.send_message(
-                chat_id=CHAT_ID,
-                text=text,
-                parse_mode="Markdown",
-                reply_markup=keyboard,
+                chat_id=CHAT_ID, text=text,
+                parse_mode="Markdown", reply_markup=keyboard,
             )
             msg_id = msg.message_id
-
-            # Poll for callback query from the user
             offset = None
             deadline = asyncio.get_event_loop().time() + TIMEOUT
+
             while asyncio.get_event_loop().time() < deadline:
-                updates = await bot.get_updates(offset=offset, timeout=5,
-                                                allowed_updates=["callback_query"])
+                updates = await bot.get_updates(
+                    offset=offset, timeout=5,
+                    allowed_updates=["callback_query"]
+                )
                 for update in updates:
                     offset = update.update_id + 1
                     cb = update.callback_query
@@ -83,46 +172,26 @@ async def request_approval(signal: Signal, shares: int, commission: float) -> bo
                         approved = cb.data.startswith("approve_")
                         label = "APPROVED ✅" if approved else "REJECTED ❌"
                         await cb.answer()
-                        await bot.send_message(chat_id=CHAT_ID,
-                                               text=f"Trade *{signal.symbol}* {label}",
-                                               parse_mode="Markdown")
+                        await bot.send_message(
+                            chat_id=CHAT_ID,
+                            text=f"Trade *{signal.symbol}* {label}",
+                            parse_mode="Markdown",
+                        )
                         logger.info("Trade {} {} via Telegram", signal.symbol, label)
                         return approved
 
-            await bot.send_message(chat_id=CHAT_ID,
-                                   text=f"⏱ Trade *{signal.symbol}* skipped — no response in {TIMEOUT}s.",
-                                   parse_mode="Markdown")
-            logger.warning("Trade {} skipped — Telegram approval timed out", signal.symbol)
+            await bot.send_message(
+                chat_id=CHAT_ID,
+                text=f"⏱ Trade *{signal.symbol}* skipped — no response in {TIMEOUT}s.",
+                parse_mode="Markdown",
+            )
+            logger.warning("Trade {} skipped — approval timed out", signal.symbol)
             return False
 
     except TelegramError as exc:
-        logger.error("Telegram error during approval: {}", exc)
+        logger.error("Telegram approval error: {}", exc)
         return False
 
 
-async def send_message(text: str) -> None:
-    bot = _get_bot()
-    if not bot:
-        return
-    try:
-        async with bot:
-            await bot.send_message(chat_id=CHAT_ID, text=text, parse_mode="Markdown")
-    except TelegramError as exc:
-        logger.error("Telegram send_message failed: {}", exc)
-
-
 async def send_daily_report(report: str) -> None:
-    header = f"📊 *Daily Report — {datetime.now().strftime('%Y-%m-%d')}*\n"
-    await send_message(header + f"```\n{report}\n```")
-
-
-def notify(text: str) -> None:
-    """Fire-and-forget message from sync context."""
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            loop.create_task(send_message(text))
-        else:
-            loop.run_until_complete(send_message(text))
-    except Exception as exc:
-        logger.error("Telegram notify failed: {}", exc)
+    await _send(f"📊 *Daily Report — {datetime.now().strftime('%Y-%m-%d')}*\n```\n{report}\n```")

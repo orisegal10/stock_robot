@@ -1,9 +1,9 @@
 """
 Order execution via ib_insync.
 
-- Checks Discord approval before placing any order.
-- Places a bracket order: market entry + stop loss.
-- Tracks open positions and filled orders for the day.
+- BUY: Discord/Telegram approval → market order + stop loss
+- SELL: market order immediately when strategy fires SELL signal (price touched target)
+- Sends Telegram messages on bought and sold
 """
 import asyncio
 from dataclasses import dataclass, field
@@ -14,7 +14,7 @@ from ib_insync import IB, Stock, MarketOrder, StopOrder, Trade
 from loguru import logger
 
 from src.config import config
-from src.strategy import Signal
+from src.strategy import Signal, Action
 from src.risk_manager import RiskManager
 from src.utils import calc_commission
 import src.alerts as alerts
@@ -26,6 +26,7 @@ class OpenPosition:
     shares: int
     entry_price: float
     stop_price: float
+    target_price: float
     entry_time: datetime = field(default_factory=datetime.now)
     trade: Optional[Trade] = None
 
@@ -47,10 +48,17 @@ class ExecutionManager:
         self._risk = risk
         self._positions: List[OpenPosition] = []
         self._filled: List[FilledTrade] = []
-        self._dry_run = config.get("ibkr", "paper_trading", default=True)
+        self._paper = config.get("ibkr", "paper_trading", default=True)
+
+    # ------------------------------------------------------------------
+    # BUY flow
+    # ------------------------------------------------------------------
 
     async def handle_signal(self, signal: Signal, max_position_usd: float) -> bool:
-        """Full pipeline: risk check → approval → order."""
+        if signal.action == Action.SELL:
+            return self._handle_sell(signal)
+
+        # BUY flow
         allowed, reason, shares = self._risk.check_trade_allowed(
             signal.entry_price, signal.stop_price, max_position_usd
         )
@@ -63,42 +71,98 @@ class ExecutionManager:
         if not approved:
             return False
 
-        return self._place_order(signal, shares)
+        return self._place_buy(signal, shares)
 
-    def _place_order(self, signal: Signal, shares: int) -> bool:
+    def _place_buy(self, signal: Signal, shares: int) -> bool:
         contract = Stock(signal.symbol, "SMART", "USD")
         try:
             self._ib.qualifyContracts(contract)
-            entry_order = MarketOrder("BUY", shares)
-            stop_order = StopOrder("SELL", shares, signal.stop_price)
-
-            entry_trade = self._ib.placeOrder(contract, entry_order)
-            self._ib.placeOrder(contract, stop_order)
+            entry_trade = self._ib.placeOrder(contract, MarketOrder("BUY", shares))
+            self._ib.placeOrder(contract, StopOrder("SELL", shares, signal.stop_price))
 
             pos = OpenPosition(
                 symbol=signal.symbol,
                 shares=shares,
                 entry_price=signal.entry_price,
                 stop_price=signal.stop_price,
+                target_price=signal.target_price,
                 trade=entry_trade,
             )
             self._positions.append(pos)
             self._risk.record_position_opened()
 
-            mode = "PAPER" if self._dry_run else "LIVE"
-            logger.info("[{}] Order placed: BUY {} x {} @ ~${:.2f} | Stop: ${:.2f}",
-                        mode, shares, signal.symbol, signal.entry_price, signal.stop_price)
-            alerts.notify(
-                f"✅ [{mode}] BUY {shares}x {signal.symbol} @ ~${signal.entry_price:.2f} | "
-                f"Stop ${signal.stop_price:.2f}"
+            mode = "PAPER" if self._paper else "LIVE"
+            logger.info("[{}] BUY {} x {} @ ~${:.2f} | Target ${:.2f} | Stop ${:.2f}",
+                        mode, shares, signal.symbol,
+                        signal.entry_price, signal.target_price, signal.stop_price)
+
+            alerts.send_bought(
+                symbol=signal.symbol,
+                shares=shares,
+                price=signal.entry_price,
+                target=signal.target_price,
+                gain_pct=signal.potential_gain_pct,
             )
             return True
+
         except Exception as exc:
-            logger.error("Order placement failed for {}: {}", signal.symbol, exc)
+            logger.error("BUY order failed for {}: {}", signal.symbol, exc)
             return False
 
+    # ------------------------------------------------------------------
+    # SELL flow (target touched)
+    # ------------------------------------------------------------------
+
+    def _handle_sell(self, signal: Signal) -> bool:
+        pos = next((p for p in self._positions if p.symbol == signal.symbol), None)
+        if pos is None:
+            logger.warning("SELL signal for {} but no open position found", signal.symbol)
+            return False
+
+        contract = Stock(signal.symbol, "SMART", "USD")
+        try:
+            self._ib.qualifyContracts(contract)
+            self._ib.placeOrder(contract, MarketOrder("SELL", pos.shares))
+
+            exit_price = signal.entry_price  # signal.entry_price = current price at touch
+            commission = calc_commission(pos.shares) * 2
+            pnl = (exit_price - pos.entry_price) * pos.shares
+            net_pnl = pnl - commission
+
+            filled = FilledTrade(
+                symbol=pos.symbol,
+                shares=pos.shares,
+                entry_price=pos.entry_price,
+                exit_price=exit_price,
+                pnl=pnl,
+                commission=commission,
+                net_pnl=net_pnl,
+            )
+            self._filled.append(filled)
+            self._positions.remove(pos)
+            self._risk.record_position_closed(pnl=net_pnl)
+
+            mode = "PAPER" if self._paper else "LIVE"
+            logger.info("[{}] SELL {} x {} @ ${:.2f} | P&L ${:+.2f}",
+                        mode, pos.shares, pos.symbol, exit_price, net_pnl)
+
+            alerts.send_sold(
+                symbol=pos.symbol,
+                shares=pos.shares,
+                entry=pos.entry_price,
+                exit_price=exit_price,
+            )
+            return True
+
+        except Exception as exc:
+            logger.error("SELL order failed for {}: {}", signal.symbol, exc)
+            return False
+
+    # ------------------------------------------------------------------
+    # End of day
+    # ------------------------------------------------------------------
+
     def close_all_positions(self) -> None:
-        """Market-close all open positions (called at end of day)."""
         for pos in list(self._positions):
             try:
                 contract = Stock(pos.symbol, "SMART", "USD")
