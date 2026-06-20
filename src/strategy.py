@@ -1,11 +1,13 @@
 """
-ORB (Opening Range Breakout) + Retest strategy engine.
+ORB (Opening Range Breakout) + Retest strategy — multi-timeframe.
 
-Logic:
-  1. After OR window closes, watch for price breaking above or_high.
-  2. Once broken, wait for a Retest — price returns to or_high level.
-  3. On confirmed Retest, emit a LONG signal.
-  4. One signal per symbol per trading day.
+Timeframes:
+  - OR captured on 15 min bars
+  - Breakout + swing high tracked on 5 min bars
+  - Retest entry on 1 min bars
+  - Exit: sell immediately when price touches swing high (1 min)
+
+Entry filter: only trade if potential gain >= min_gain_percent (default 2%)
 """
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -18,8 +20,9 @@ from src.config import config
 
 
 class Action(str, Enum):
-    LONG = "LONG"
-    HOLD = "HOLD"
+    LONG  = "LONG"
+    SELL  = "SELL"
+    HOLD  = "HOLD"
 
 
 @dataclass
@@ -28,8 +31,10 @@ class Signal:
     action: Action
     entry_price: float
     stop_price: float
+    target_price: float
     or_high: float
     or_low: float
+    potential_gain_pct: float
     reason: str
     timestamp: datetime = field(default_factory=datetime.now)
 
@@ -37,16 +42,19 @@ class Signal:
 class _SymbolState:
     def __init__(self):
         self.breakout_confirmed = False
-        self.retest_candles = 0
+        self.retest_candles     = 0
         self.signal_fired_today = False
+        self.position_open      = False
+        self.entry_price: Optional[float] = None
+        self.target_price: Optional[float] = None
 
 
 class StrategyEngine:
     def __init__(self):
         self._states: Dict[str, _SymbolState] = {}
-        self._threshold = config.get("strategy", "breakout_threshold_points", default=0.05)
-        self._retest_max_candles = config.get("strategy", "retest_max_candles", default=5)
-        self._confirmation = config.get("strategy", "retest_confirmation_type", default="touch")
+        self._threshold     = config.get("strategy", "breakout_threshold_points", default=0.05)
+        self._retest_candles = config.get("strategy", "retest_max_candles", default=5)
+        self._min_gain_pct  = config.get("risk", "min_gain_percent", default=2.0)
 
     def _state(self, symbol: str) -> _SymbolState:
         if symbol not in self._states:
@@ -54,11 +62,13 @@ class StrategyEngine:
         return self._states[symbol]
 
     def reset_day(self) -> None:
-        """Call once at market open to clear previous day state."""
         for state in self._states.values():
             state.breakout_confirmed = False
-            state.retest_candles = 0
+            state.retest_candles     = 0
             state.signal_fired_today = False
+            state.position_open      = False
+            state.entry_price        = None
+            state.target_price       = None
         logger.info("Strategy state reset for new trading day")
 
     def evaluate(
@@ -67,72 +77,113 @@ class StrategyEngine:
         current_price: float,
         or_high: Optional[float],
         or_low: Optional[float],
+        swing_high: Optional[float],
         stop_loss_pct: float,
     ) -> Optional[Signal]:
-        """
-        Returns a Signal if entry conditions are met, otherwise None.
-        stop_loss_pct comes from universe.csv (per-symbol).
-        """
         if or_high is None or or_low is None:
             return None
 
         state = self._state(symbol)
 
-        if state.signal_fired_today:
+        # --- Check exit first: sell when price touches target ---
+        if state.position_open and state.target_price is not None:
+            if current_price >= state.target_price:
+                gained_pct = ((current_price - state.entry_price) / state.entry_price) * 100
+                logger.info("{} SELL — price {:.2f} touched target {:.2f} (+{:.2f}%)",
+                            symbol, current_price, state.target_price, gained_pct)
+                state.position_open = False
+                return Signal(
+                    symbol=symbol,
+                    action=Action.SELL,
+                    entry_price=state.entry_price,
+                    stop_price=round(state.entry_price * (1 - stop_loss_pct / 100), 2),
+                    target_price=state.target_price,
+                    or_high=or_high,
+                    or_low=or_low,
+                    potential_gain_pct=round(gained_pct, 2),
+                    reason=f"Target {state.target_price:.2f} touched",
+                )
+
+        if state.signal_fired_today or state.position_open:
             return None
 
-        # Step 1 — Detect Breakout above OR high
+        # --- Step 1: Detect breakout above OR high (5 min timeframe) ---
         if not state.breakout_confirmed:
             if current_price > or_high + self._threshold:
                 state.breakout_confirmed = True
                 state.retest_candles = 0
-                logger.info("{} BREAKOUT above OR high {:.2f} at price {:.2f}",
+                logger.info("{} BREAKOUT above OR high {:.2f} @ {:.2f}",
                             symbol, or_high, current_price)
             return None
 
-        # Step 2 — Watch for Retest
+        # --- Step 2: Validate swing high exists and gain >= min_gain_pct ---
+        if swing_high is None:
+            return None
+
+        if or_high <= 0:
+            return None
+
+        # Entry will be approximately current price on retest
+        potential_gain = ((swing_high - current_price) / current_price) * 100
+        if potential_gain < self._min_gain_pct:
+            return None   # not worth trading
+
+        # --- Step 3: Retest detection (1 min timeframe) ---
         retest_zone_high = or_high + self._threshold
-        retest_zone_low = or_high - self._threshold * 3
+        retest_zone_low  = or_high - self._threshold * 3
 
-        price_in_retest_zone = retest_zone_low <= current_price <= retest_zone_high
+        in_zone = retest_zone_low <= current_price <= retest_zone_high
 
-        if price_in_retest_zone:
+        if in_zone:
             state.retest_candles += 1
         else:
-            # Price moved away from retest zone — check if retest is confirmed
             if state.retest_candles > 0 and current_price > or_high:
-                return self._emit_signal(symbol, current_price, or_high, or_low,
-                                         stop_loss_pct, state)
+                return self._emit_buy(symbol, current_price, or_high, or_low,
+                                      swing_high, stop_loss_pct, state)
             state.retest_candles = 0
 
-        # Retest candles accumulated enough — fire
-        if state.retest_candles >= self._retest_max_candles and current_price > or_high:
-            return self._emit_signal(symbol, current_price, or_high, or_low,
-                                     stop_loss_pct, state)
+        if state.retest_candles >= self._retest_candles and current_price > or_high:
+            return self._emit_buy(symbol, current_price, or_high, or_low,
+                                  swing_high, stop_loss_pct, state)
 
         return None
 
-    def _emit_signal(
+    def _emit_buy(
         self,
         symbol: str,
         price: float,
         or_high: float,
         or_low: float,
+        swing_high: float,
         stop_loss_pct: float,
         state: _SymbolState,
     ) -> Signal:
-        stop = round(price * (1 - stop_loss_pct / 100), 2)
+        stop   = round(price * (1 - stop_loss_pct / 100), 2)
+        target = round(swing_high, 2)
+        gain   = round(((target - price) / price) * 100, 2)
+
         state.signal_fired_today = True
-        state.retest_candles = 0
+        state.retest_candles     = 0
+        state.position_open      = True
+        state.entry_price        = round(price, 2)
+        state.target_price       = target
+
         signal = Signal(
             symbol=symbol,
             action=Action.LONG,
             entry_price=round(price, 2),
             stop_price=stop,
+            target_price=target,
             or_high=or_high,
             or_low=or_low,
-            reason=f"ORB breakout + retest of {or_high:.2f}",
+            potential_gain_pct=gain,
+            reason=f"ORB retest of {or_high:.2f} | target swing high {target:.2f}",
         )
-        logger.info("SIGNAL {} | Entry {:.2f} | Stop {:.2f} | OR High {:.2f}",
-                    symbol, price, stop, or_high)
+        logger.info("BUY SIGNAL {} | Entry {:.2f} | Target {:.2f} | Stop {:.2f} | Gain {:.2f}%",
+                    symbol, price, target, stop, gain)
         return signal
+
+    def record_position_closed(self, symbol: str) -> None:
+        """Call when a stop loss is hit externally."""
+        state = self._state(symbol)
+        state.position_open = False
