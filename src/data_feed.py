@@ -43,6 +43,9 @@ class SymbolData:
     # Latest price (from ticks)
     latest_price: Optional[float] = None
 
+    # Latency tracking
+    last_tick_time: Optional[datetime] = None
+
     # Raw tick prices for bar aggregation
     tick_prices: List[Tuple[datetime, float]] = field(default_factory=list)
 
@@ -105,6 +108,7 @@ class DataFeed:
 
             data = self._symbols[sym]
             data.latest_price = price
+            data.last_tick_time = now
 
             # --- Opening Range capture (15 min window) ---
             if now_time <= self._or_end:
@@ -177,6 +181,22 @@ class DataFeed:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    def get_latency_seconds(self, symbol: str) -> Optional[float]:
+        """Returns seconds since last tick, or None if no tick received yet."""
+        d = self._symbols.get(symbol)
+        if d is None or d.last_tick_time is None:
+            return None
+        return (datetime.now() - d.last_tick_time).total_seconds()
+
+    def get_max_latency_seconds(self) -> Optional[float]:
+        """Returns the worst latency across all symbols."""
+        latencies = [
+            (datetime.now() - d.last_tick_time).total_seconds()
+            for d in self._symbols.values()
+            if d.last_tick_time is not None
+        ]
+        return max(latencies) if latencies else None
 
     def get_price(self, symbol: str) -> Optional[float]:
         return self._symbols[symbol].latest_price if symbol in self._symbols else None

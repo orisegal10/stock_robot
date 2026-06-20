@@ -13,6 +13,7 @@ import asyncio
 import signal
 import sys
 from datetime import datetime, time
+from typing import Optional
 
 import schedule
 from loguru import logger
@@ -87,13 +88,34 @@ def main() -> None:
     start_dt    = datetime.combine(datetime.today(), time.fromisoformat(start_str))
     or_end_time = (start_dt + timedelta(minutes=or_duration)).time()
 
+    latency_skip_until: Optional[datetime] = None
+    LATENCY_THRESHOLD_SECS = 60
+
     # ------------------------------------------------------------------
     # Tick scan — runs every update_interval_seconds
     # ------------------------------------------------------------------
     def scan_tick() -> None:
-        nonlocal signals_today, or_reported
+        nonlocal signals_today, or_reported, latency_skip_until
 
         if not is_trading_hours():
+            return
+
+        # --- Data latency check ---
+        max_latency = feed.get_max_latency_seconds()
+        if max_latency is not None and max_latency > LATENCY_THRESHOLD_SECS:
+            # Don't re-alert if already in skip mode
+            if latency_skip_until is None:
+                cont = asyncio.run(alerts.request_data_continue(max_latency))
+                if not cont:
+                    from datetime import timedelta
+                    latency_skip_until = datetime.now() + timedelta(minutes=5)
+                    logger.warning("Skipping trades for 5 min due to data latency ({:.0f}s)", max_latency)
+                    return
+        elif latency_skip_until is not None and datetime.now() > latency_skip_until:
+            latency_skip_until = None
+            alerts.notify("✅ Data feed recovered — resuming normal trading scan.")
+
+        if latency_skip_until is not None and datetime.now() < latency_skip_until:
             return
 
         now_time = datetime.now().time()

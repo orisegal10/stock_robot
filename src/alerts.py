@@ -110,6 +110,73 @@ def send_sold(symbol: str, shares: int, entry: float,
     notify(text)
 
 
+async def request_data_continue(latency_seconds: float) -> bool:
+    """
+    Alert user that data is delayed. Ask whether to continue or skip trades.
+    Returns True = continue trading, False = skip trades until data recovers.
+    """
+    minutes = int(latency_seconds // 60)
+    seconds = int(latency_seconds % 60)
+    latency_str = f"{minutes} minute{'s' if minutes != 1 else ''}" if minutes > 0 else f"{seconds} seconds"
+
+    text = (
+        f"⚠️ *Data latency warning*\n"
+        f"Market data is *{latency_str} behind* real time.\n\n"
+        f"This may affect OR capture and entry accuracy.\n"
+        f"Should we continue trading or skip until data recovers?"
+    )
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Continue", callback_data="latency_continue"),
+        InlineKeyboardButton("⏭ Skip trades", callback_data="latency_skip"),
+    ]])
+
+    logger.warning("[Telegram] Data latency alert: {} behind", latency_str)
+
+    bot = _get_bot()
+    if bot is None:
+        logger.warning("Telegram unavailable — continuing despite latency")
+        return True
+
+    try:
+        async with bot:
+            msg = await bot.send_message(
+                chat_id=CHAT_ID, text=text,
+                parse_mode="Markdown", reply_markup=keyboard,
+            )
+            msg_id = msg.message_id
+            offset = None
+            deadline = asyncio.get_event_loop().time() + TIMEOUT
+
+            while asyncio.get_event_loop().time() < deadline:
+                updates = await bot.get_updates(
+                    offset=offset, timeout=5,
+                    allowed_updates=["callback_query"]
+                )
+                for update in updates:
+                    offset = update.update_id + 1
+                    cb = update.callback_query
+                    if cb and cb.message and cb.message.message_id == msg_id:
+                        cont = cb.data == "latency_continue"
+                        label = "Continuing ✅" if cont else "Skipping trades ⏭"
+                        await cb.answer()
+                        await bot.send_message(chat_id=CHAT_ID,
+                                               text=f"*{label}* — data is {latency_str} behind.",
+                                               parse_mode="Markdown")
+                        logger.info("Latency decision: {}", label)
+                        return cont
+
+            # No response — default to skip (safer)
+            await bot.send_message(chat_id=CHAT_ID,
+                                   text=f"⏱ No response — *skipping trades* until data recovers.",
+                                   parse_mode="Markdown")
+            logger.warning("Latency alert timed out — defaulting to skip")
+            return False
+
+    except TelegramError as exc:
+        logger.error("Telegram latency alert failed: {}", exc)
+        return True   # fail open — continue trading
+
+
 def send_day_summary(trades: int, net_pnl: float, wins: int) -> None:
     emoji = "📈" if net_pnl >= 0 else "📉"
     win_rate = f"{wins}/{trades}" if trades > 0 else "0/0"
