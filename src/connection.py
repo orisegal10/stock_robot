@@ -17,7 +17,7 @@ def connect() -> bool:
     client_id = config.get("ibkr", "client_id", default=1)
 
     try:
-        _ib.connect(host, port, clientId=client_id, timeout=20, readonly=False)
+        _ib.connect(host, port, clientId=client_id, timeout=60, readonly=False)
         logger.info("Connected to IB Gateway at {}:{} (clientId={})", host, port, client_id)
         _ib.disconnectedEvent += _on_disconnect
         return True
