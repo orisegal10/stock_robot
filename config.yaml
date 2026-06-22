@@ -4,7 +4,7 @@
 
 # IBKR Connection
 ibkr:
-  host: "ibgateway"
+  host: "172.18.0.1"
   port: 4002          # 4002 = IB Gateway paper | 4001 = IB Gateway live
   client_id: 1
   paper_trading: true
