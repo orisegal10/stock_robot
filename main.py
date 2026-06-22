@@ -12,6 +12,7 @@ Flow:
 import asyncio
 import signal
 import sys
+import time as time_module
 from datetime import datetime, time
 from typing import Optional
 
@@ -51,8 +52,17 @@ def main() -> None:
         logger.info("Today is not a trading day — exiting")
         sys.exit(0)
 
-    if not connect():
-        logger.error("Cannot connect to IB Gateway — exiting")
+    # Retry connecting for up to 3 minutes (IB Gateway takes time to start)
+    connected = False
+    for attempt in range(1, 19):
+        if connect():
+            connected = True
+            break
+        logger.warning("IB Gateway not ready (attempt {}/18) — retrying in 10s...", attempt)
+        time_module.sleep(10)
+
+    if not connected:
+        logger.error("Cannot connect to IB Gateway after 3 minutes — exiting")
         sys.exit(1)
 
     ib: IB = get_ib()
