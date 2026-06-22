@@ -13,6 +13,7 @@ services:
       TWS_ACCEPT_INCOMING: accept
       TWS_READONLY_API: "no"
       TWS_ALLOW_BLIND_TRADING: "yes"
+      VNC_SERVER_PASSWORD: ibgateway
     ports:
       - "4002:4002"   # IB Gateway paper API port
       - "4001:4001"   # IB Gateway live API port
