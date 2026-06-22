@@ -1,9 +1,11 @@
 FROM ghcr.io/gnzsnz/ib-gateway:stable
 
-# Override the IBC config to always accept incoming API connections
-RUN sed -i 's/AcceptIncomingConnectionAction=/AcceptIncomingConnectionAction=accept/' \
-    /home/ibgateway/ibc/config.ini && \
-    sed -i 's/AllowBlindTrading=/AllowBlindTrading=yes/' \
-    /home/ibgateway/ibc/config.ini && \
-    sed -i 's/ReadOnlyApi=/ReadOnlyApi=no/' \
-    /home/ibgateway/ibc/config.ini
+# Patch the startup script to always set AcceptIncomingConnectionAction=accept
+# The script regenerates config.ini each start, so we patch the source
+RUN grep -n "AcceptIncomingConnectionAction" /home/ibgateway/scripts/common.sh || true
+RUN sed -i 's/AcceptIncomingConnectionAction=\${[^}]*}/AcceptIncomingConnectionAction=accept/g' \
+        /home/ibgateway/scripts/common.sh && \
+    sed -i 's/AllowBlindTrading=\${[^}]*}/AllowBlindTrading=yes/g' \
+        /home/ibgateway/scripts/common.sh && \
+    sed -i 's/ReadOnlyApi=\${[^}]*}/ReadOnlyApi=no/g' \
+        /home/ibgateway/scripts/common.sh
