@@ -8,9 +8,9 @@ services:
       TWS_USERID: ${IBKR_USERNAME}
       TWS_PASSWORD: ${IBKR_PASSWORD}
       TRADING_MODE: paper
-      IBC_ACCEPT_INCOMING_CONNECTION: accept
-      IBC_ALLOW_BLIND_TRADING: "yes"
-      IBC_READ_ONLY_API: "no"
+      ACCEPT_INCOMING_CONNECTION: accept
+      READ_ONLY_API: "no"
+      ALLOW_BLIND_TRADING: "yes"
     ports:
       - "4002:4002"   # IB Gateway paper API port
       - "4001:4001"   # IB Gateway live API port
