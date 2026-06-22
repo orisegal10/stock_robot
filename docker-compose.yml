@@ -8,13 +8,10 @@ services:
       TWS_USERID: ${IBKR_USERNAME}
       TWS_PASSWORD: ${IBKR_PASSWORD}
       TRADING_MODE: paper
-      TWS_SETTINGS_PATH: /home/ibgateway/settings
     ports:
       - "4002:4002"   # IB Gateway paper API port
       - "4001:4001"   # IB Gateway live API port
       - "5900:5900"   # VNC for manual access if needed
-    volumes:
-      - ibgateway_data:/home/ibgateway/settings
 
   orb-bot:
     build: .
@@ -44,5 +41,3 @@ services:
       - "8501:8501"
     command: streamlit run ui/streamlit_app.py --server.address 0.0.0.0 --server.port 8501
 
-volumes:
-  ibgateway_data:
