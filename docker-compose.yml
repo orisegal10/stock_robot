@@ -2,7 +2,9 @@ version: "3.9"
 
 services:
   ibgateway:
-    image: ghcr.io/gnzsnz/ib-gateway:stable
+    build:
+      context: .
+      dockerfile: Dockerfile.ibgateway
     restart: unless-stopped
     environment:
       TWS_USERID: ${IBKR_USERNAME}
