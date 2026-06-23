@@ -1,6 +1,9 @@
-symbol,volatility_hv,stop_loss_pct,atr_14,min_volume,rsi_14,max_position_usd,notes,active
-MU,92,1.15,12.5,8000000,52,15000,Semiconductor,True
-NVTS,88,1.45,1.8,2000000,48,8000,Semiconductor,True
-HOOD,78,1.25,3.2,5000000,55,12000,Fintech,True
-NBIS,82,1.35,8.5,1500000,45,10000,Tech/AI,True
-SMR,95,1.60,0.23,3000000,50,6000,Nuclear,True
+symbol,volatility_hv,stop_loss_pct,atr_14,min_volume,rsi_14,max_position_usd,notes,active,Last Price
+APLD,99,1.8,0.45,800000,52,15,AI Data Centers,TRUE,9.5
+AAOI,99,2,0.6,300000,50,70,Optical Components,TRUE,18
+APPS,82,1.5,0.35,200000,48,20,Mobile Advertising,TRUE,5.5
+ASTS,99,2.2,0.9,1500000,55,100,Satellite Internet,TRUE,25
+BE,78,1.4,0.55,500000,50,50,Clean Energy,TRUE,22
+CRWV,95,1.8,3.5,400000,52,70,AI Cloud,TRUE,55
+JOBY,88,1.7,0.3,600000,48,25,Electric Air Taxi,TRUE,6.5
+RKLB,92,1.6,0.55,800000,52,60,Space Launch,TRUE,25
