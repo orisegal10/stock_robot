@@ -11,7 +11,7 @@ services:
       TWS_PASSWORD: ${IBKR_PASSWORD}
       TRADING_MODE: paper
       TWS_ACCEPT_INCOMING: accept
-      TWS_READONLY_API: "no"
+      READ_ONLY_API: "no"
       TWS_ALLOW_BLIND_TRADING: "yes"
       VNC_SERVER_PASSWORD: ibgateway
     ports:
