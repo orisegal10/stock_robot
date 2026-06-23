@@ -18,7 +18,7 @@ trading:
 
 # Opening Range
 opening_range:
-  duration_minutes: 5    # OR window: start_time → start_time + duration
+  duration_minutes: 15   # OR window: start_time → start_time + duration
 
 # Breakout & Retest
 strategy:

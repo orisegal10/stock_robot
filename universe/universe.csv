@@ -1,9 +1,9 @@
 symbol,volatility_hv,stop_loss_pct,atr_14,min_volume,rsi_14,max_position_usd,notes,active,Last Price
-APLD,99,1.8,0.45,800000,52,15,AI Data Centers,TRUE,9.5
-AAOI,99,2,0.6,300000,50,70,Optical Components,TRUE,18
-APPS,82,1.5,0.35,200000,48,20,Mobile Advertising,TRUE,5.5
-ASTS,99,2.2,0.9,1500000,55,100,Satellite Internet,TRUE,25
-BE,78,1.4,0.55,500000,50,50,Clean Energy,TRUE,22
-CRWV,95,1.8,3.5,400000,52,70,AI Cloud,TRUE,55
-JOBY,88,1.7,0.3,600000,48,25,Electric Air Taxi,TRUE,6.5
-RKLB,92,1.6,0.55,800000,52,60,Space Launch,TRUE,25
+APLD,99,1.8,0.45,800000,52,150,AI Data Centers,TRUE,45.35
+AAOI,99,2,0.6,300000,50,342,Optical Components,TRUE,155.50
+APPS,82,1.5,0.35,200000,48,31,Mobile Advertising,TRUE,9.37
+ASTS,99,2.2,0.9,1500000,55,248,Satellite Internet,TRUE,75.30
+BE,78,1.4,0.55,500000,50,360,Clean Energy,TRUE,327.31
+CRWV,95,1.8,3.5,400000,52,235,AI Cloud,TRUE,107.01
+JOBY,88,1.7,0.3,600000,48,32,Electric Air Taxi,TRUE,9.72
+RKLB,92,1.6,0.55,800000,52,215,Space Launch,TRUE,97.54
