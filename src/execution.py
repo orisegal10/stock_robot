@@ -78,13 +78,27 @@ class ExecutionManager:
         try:
             self._ib.qualifyContracts(contract)
             entry_trade = self._ib.placeOrder(contract, MarketOrder("BUY", shares))
-            self._ib.placeOrder(contract, StopOrder("SELL", shares, signal.stop_price))
+
+            # Wait for fill to get the actual fill price (up to 10s)
+            for _ in range(10):
+                self._ib.sleep(1)
+                if entry_trade.orderStatus.filled >= shares:
+                    break
+
+            fill_price = entry_trade.orderStatus.avgFillPrice or signal.entry_price
+            if not fill_price or fill_price != fill_price:  # nan check
+                fill_price = signal.entry_price
+            stop_loss_pct = signal.stop_price / signal.entry_price  # preserve ratio
+            actual_stop = round(fill_price * stop_loss_pct, 2)
+
+            logger.info("Buy filled @ ${:.2f} — placing stop at ${:.2f}", fill_price, actual_stop)
+            self._ib.placeOrder(contract, StopOrder("SELL", shares, actual_stop))
 
             pos = OpenPosition(
                 symbol=signal.symbol,
                 shares=shares,
-                entry_price=signal.entry_price,
-                stop_price=signal.stop_price,
+                entry_price=fill_price,
+                stop_price=actual_stop,
                 target_price=signal.target_price,
                 trade=entry_trade,
             )
@@ -92,14 +106,14 @@ class ExecutionManager:
             self._risk.record_position_opened()
 
             mode = "PAPER" if self._paper else "LIVE"
-            logger.info("[{}] BUY {} x {} @ ~${:.2f} | Target ${:.2f} | Stop ${:.2f}",
+            logger.info("[{}] BUY {} x {} @ ${:.2f} | Target ${:.2f} | Stop ${:.2f}",
                         mode, shares, signal.symbol,
-                        signal.entry_price, signal.target_price, signal.stop_price)
+                        fill_price, signal.target_price, actual_stop)
 
             alerts.send_bought(
                 symbol=signal.symbol,
                 shares=shares,
-                price=signal.entry_price,
+                price=fill_price,
                 target=signal.target_price,
                 gain_pct=signal.potential_gain_pct,
             )

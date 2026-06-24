@@ -47,24 +47,34 @@ if not price:
     ib.disconnect()
     sys.exit(1)
 
-stop_price = round(price * 0.98, 2)   # 2% stop loss
-logger.info("Placing BUY {} x {} @ market | Stop: ${}", SHARES, SYMBOL, stop_price)
+logger.info("Placing BUY {} x {} @ market", SHARES, SYMBOL)
 
 # Place market buy order
 buy_order = MarketOrder("BUY", SHARES)
 trade = ib.placeOrder(contract, buy_order)
-ib.sleep(2)
 
+# Wait for fill (up to 10s)
+for _ in range(10):
+    ib.sleep(1)
+    if trade.orderStatus.filled >= SHARES:
+        break
+
+fill_price = trade.orderStatus.avgFillPrice
 logger.info("Buy order status: {} | filled: {} @ ${}",
             trade.orderStatus.status,
             trade.orderStatus.filled,
-            trade.orderStatus.avgFillPrice)
+            fill_price)
 
-# Place stop loss
-stop_order = StopOrder("SELL", SHARES, stop_price)
-stop_trade = ib.placeOrder(contract, stop_order)
-ib.sleep(1)
-logger.info("Stop loss order status: {}", stop_trade.orderStatus.status)
+if not fill_price or str(fill_price) == 'nan':
+    logger.error("No fill price — cannot place stop loss")
+else:
+    # Place stop loss using actual fill price
+    stop_price = round(fill_price * 0.98, 2)
+    logger.info("Placing stop loss at ${}", stop_price)
+    stop_order = StopOrder("SELL", SHARES, stop_price)
+    stop_trade = ib.placeOrder(contract, stop_order)
+    ib.sleep(2)
+    logger.info("Stop loss order status: {}", stop_trade.orderStatus.status)
 
 logger.info("Test complete. Check your IBKR paper account to verify the orders.")
 logger.info("To cancel the orders, go to IBKR paper account > Orders > Cancel All")
