@@ -21,7 +21,7 @@ from loguru import logger
 from ib_insync import IB
 
 from src.config import config
-from src.utils import setup_logging, is_trading_day, is_trading_hours
+from src.utils import setup_logging, is_trading_day, is_trading_hours, ET
 from src.connection import connect, disconnect, get_ib
 from src.universe import load_universe
 from src.data_feed import DataFeed
@@ -52,17 +52,17 @@ def main() -> None:
         logger.info("Today is not a trading day — exiting")
         sys.exit(0)
 
-    # Retry connecting for up to 3 minutes (IB Gateway takes time to start)
+    # Retry connecting for up to 10 minutes (IB Gateway takes time to start)
     connected = False
-    for attempt in range(1, 19):
+    for attempt in range(1, 61):
         if connect():
             connected = True
             break
-        logger.warning("IB Gateway not ready (attempt {}/18) — retrying in 10s...", attempt)
+        logger.warning("IB Gateway not ready (attempt {}/60) — retrying in 10s...", attempt)
         time_module.sleep(10)
 
     if not connected:
-        logger.error("Cannot connect to IB Gateway after 3 minutes — exiting")
+        logger.error("Cannot connect to IB Gateway after 10 minutes — exiting")
         sys.exit(1)
 
     ib: IB = get_ib()
@@ -95,7 +95,7 @@ def main() -> None:
     or_duration = config.get("opening_range", "duration_minutes", default=15)
     start_str   = config.get("trading", "start_time", default="09:30")
     from datetime import timedelta
-    start_dt    = datetime.combine(datetime.today(), time.fromisoformat(start_str))
+    start_dt    = datetime.combine(datetime.now(ET).date(), time.fromisoformat(start_str))
     or_end_time = (start_dt + timedelta(minutes=or_duration)).time()
 
     latency_skip_until: Optional[datetime] = None
@@ -128,7 +128,7 @@ def main() -> None:
         if latency_skip_until is not None and datetime.now() < latency_skip_until:
             return
 
-        now_time = datetime.now().time()
+        now_time = datetime.now(ET).time()
 
         # Report OR once after the window closes
         if not or_reported and now_time > or_end_time:

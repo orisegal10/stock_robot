@@ -1,9 +1,16 @@
 import sys
 from datetime import datetime, time
 from pathlib import Path
+from zoneinfo import ZoneInfo
 from loguru import logger
 
 from src.config import config
+
+ET = ZoneInfo("America/New_York")
+
+
+def _now_et() -> datetime:
+    return datetime.now(ET)
 
 
 def setup_logging() -> None:
@@ -28,23 +35,22 @@ def setup_logging() -> None:
 def is_trading_day() -> bool:
     allowed = config.get("trading", "trade_dow",
                          default=["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"])
-    return datetime.now().strftime("%A") in allowed
+    return _now_et().strftime("%A") in allowed
 
 
 def is_trading_hours() -> bool:
-    now = datetime.now().time()
+    now = _now_et().time()
     start = time.fromisoformat(config.get("trading", "start_time", default="09:30"))
     end = time.fromisoformat(config.get("trading", "end_time", default="16:00"))
     return start <= now <= end
 
 
 def is_opening_range_window() -> bool:
-    now = datetime.now().time()
+    now = _now_et().time()
     start = time.fromisoformat(config.get("trading", "start_time", default="09:30"))
-    duration = config.get("opening_range", "duration_minutes", default=5)
-    end_dt = datetime.combine(datetime.today(), start)
+    duration = config.get("opening_range", "duration_minutes", default=15)
     from datetime import timedelta
-    end_dt = end_dt + timedelta(minutes=duration)
+    end_dt = datetime.combine(datetime.today(), start) + timedelta(minutes=duration)
     return start <= now <= end_dt.time()
 
 
