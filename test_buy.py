@@ -25,11 +25,7 @@ except Exception as e:
     logger.error("Connection failed: {}", e)
     sys.exit(1)
 
-logger.info("Connected. Portfolio value:")
-for item in ib.accountSummary():
-    if item.tag == "NetLiquidation":
-        logger.info("  NetLiquidation: ${}", item.value)
-        break
+logger.info("Connected.")
 
 # Qualify contract
 contract = Stock(SYMBOL, "SMART", "USD")
