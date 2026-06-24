@@ -17,6 +17,7 @@ from loguru import logger
 from ib_insync import IB, Stock, Ticker
 
 from src.config import config
+from src.utils import ET
 
 
 @dataclass
@@ -71,7 +72,7 @@ class DataFeed:
     def _compute_or_end(self) -> time:
         start_str = config.get("trading", "start_time", default="09:30")
         duration = config.get("opening_range", "duration_minutes", default=15)
-        start_dt = datetime.combine(datetime.today(), time.fromisoformat(start_str))
+        start_dt = datetime.combine(datetime.now(ET).date(), time.fromisoformat(start_str))
         return (start_dt + timedelta(minutes=duration)).time()
 
     def subscribe(self, symbols: List[str]) -> None:
@@ -91,8 +92,8 @@ class DataFeed:
         logger.info("Unsubscribed from all market data")
 
     def _on_ticks(self, tickers) -> None:
-        now = datetime.now()
-        now_time = now.time()
+        now = datetime.now(ET).replace(tzinfo=None)
+        now_time = datetime.now(ET).time()
 
         for ticker in tickers:
             sym = ticker.contract.symbol
