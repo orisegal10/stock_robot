@@ -47,14 +47,10 @@ def disconnect() -> None:
 
 
 def _on_disconnect() -> None:
-    logger.warning("Lost connection to IB Gateway — attempting reconnect in 10s")
-    import time
-    time.sleep(10)
-    try:
-        connect()
-        logger.info("Reconnected to IB Gateway")
-    except Exception as exc:
-        logger.error("Reconnect failed: {}", exc)
+    import sys
+    if sys.meta_path is None:
+        return  # Python is shutting down, skip reconnect
+    logger.warning("Lost connection to IB Gateway — will reconnect via main loop")
 
 
 def is_connected() -> bool:

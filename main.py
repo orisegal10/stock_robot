@@ -212,7 +212,25 @@ def main() -> None:
     logger.info("Bot running — scanning every {}s | press Ctrl+C to stop", interval)
 
     while True:
-        ib.sleep(1)
+        try:
+            ib.sleep(1)
+        except Exception:
+            pass  # connection drop — handled below
+
+        if not ib.isConnected():
+            logger.warning("Disconnected — attempting reconnect in 30s...")
+            time_module.sleep(30)
+            for attempt in range(1, 31):
+                if connect():
+                    logger.info("Reconnected successfully")
+                    feed.subscribe(list(symbols.keys()))
+                    break
+                logger.warning("Reconnect attempt {}/30 failed — retrying in 30s", attempt)
+                time_module.sleep(30)
+            else:
+                logger.error("Could not reconnect after 15 minutes — exiting")
+                sys.exit(1)
+
         schedule.run_pending()
 
 
