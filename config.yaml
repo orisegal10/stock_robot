@@ -56,6 +56,10 @@ commissions:
 telegram:
   approval_timeout_seconds: 60   # if no reply in 60s, skip the trade
 
+# Trading Log telemetry (Trading Log dashboard tab + Telegram phase alerts)
+telemetry:
+  telegram_updates: true   # ping Telegram when a stock breaks out / retests / drops below OR low
+
 # UI & Logging
 ui:
   show_ui: true

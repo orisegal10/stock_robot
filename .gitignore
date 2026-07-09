@@ -13,3 +13,7 @@ venv/
 # IDE
 .vscode/
 .idea/
+
+# Personal / local-only (never publish)
+my_portfolio.yaml
+install_robot.bat

@@ -5,10 +5,17 @@ from ib_insync import IB
 from src.config import config
 
 _ib = IB()
+_competing_session_cb = None  # set by DataFeed after subscribe
 
 
 def get_ib() -> IB:
     return _ib
+
+
+def set_competing_session_callback(cb) -> None:
+    """DataFeed registers this so we can notify it when 10197 fires/clears."""
+    global _competing_session_cb
+    _competing_session_cb = cb
 
 
 def connect() -> bool:
@@ -19,7 +26,6 @@ def connect() -> bool:
     try:
         _ib.connect(host, port, clientId=client_id, timeout=60, readonly=False)
         logger.info("Connected to IB Gateway at {}:{} (clientId={})", host, port, client_id)
-        # Register error handler for competing session warnings
         _ib.errorEvent += _on_error
         _ib.disconnectedEvent += _on_disconnect
         return True
@@ -30,12 +36,15 @@ def connect() -> bool:
 
 def _on_error(reqId, errorCode, errorString, contract) -> None:
     if errorCode == 10197:
-        logger.warning("⚠️  Competing IBKR session detected (error 10197) — "
-                       "market data paused. Log out of IBKR on other devices to resume.")
+        logger.warning("⚠️  Competing IBKR session — switching to delayed data")
+        if _competing_session_cb:
+            _competing_session_cb(True)
     elif errorCode == 10089:
-        pass  # expected: delayed data available, not critical
+        pass  # expected: delayed data available
     elif errorCode in (2104, 2106, 2158):
-        pass  # market data farm connection notices, not critical
+        # market data farm reconnected — competing session may have cleared
+        if _competing_session_cb:
+            _competing_session_cb(False)
     else:
         logger.debug("IB error {}: {}", errorCode, errorString)
 

@@ -39,6 +39,21 @@ class Signal:
     timestamp: datetime = field(default_factory=datetime.now)
 
 
+@dataclass
+class MonitorStatus:
+    """Read-only snapshot of what the strategy currently sees for a symbol.
+
+    Used for telemetry/debugging — does not change any state.
+    """
+    symbol: str
+    price: float
+    or_high: float
+    or_low: float
+    position_text: str   # "Above high" | "Below low" | "Inside range"
+    retest_text: str     # human-readable breakout/retest description
+    phase: str           # coarse phase: PRE | BREAKOUT | RETEST | ENTERED | BELOW_LOW
+
+
 class _SymbolState:
     def __init__(self):
         self.breakout_confirmed = False
@@ -182,6 +197,60 @@ class StrategyEngine:
         logger.info("BUY SIGNAL {} | Entry {:.2f} | Target {:.2f} | Stop {:.2f} | Gain {:.2f}%",
                     symbol, price, target, stop, gain)
         return signal
+
+    def describe(
+        self,
+        symbol: str,
+        price: float,
+        or_high: Optional[float],
+        or_low: Optional[float],
+    ) -> Optional[MonitorStatus]:
+        """Describe the current monitoring state for a symbol without mutating it.
+
+        Call *after* evaluate() so the returned state reflects this tick.
+        """
+        if or_high is None or or_low is None:
+            return None
+
+        state = self._state(symbol)
+
+        if price > or_high:
+            position_text = "Above high"
+        elif price < or_low:
+            position_text = "Below low"
+        else:
+            position_text = "Inside range"
+
+        retest_zone_low  = or_high - self._threshold * 3
+        retest_zone_high = or_high + self._threshold
+        in_zone = retest_zone_low <= price <= retest_zone_high
+
+        if state.signal_fired_today or state.position_open:
+            retest_text = "Entry triggered"
+            phase = "ENTERED"
+        elif not state.breakout_confirmed:
+            if price < or_low:
+                retest_text = "Below OR low — no long setup"
+                phase = "BELOW_LOW"
+            else:
+                retest_text = "Waiting for breakout above OR high"
+                phase = "PRE"
+        elif in_zone:
+            retest_text = f"Retesting OR high ({state.retest_candles}/{self._retest_candles})"
+            phase = "RETEST"
+        else:
+            retest_text = "Broke out — awaiting retest"
+            phase = "BREAKOUT"
+
+        return MonitorStatus(
+            symbol=symbol,
+            price=round(price, 4),
+            or_high=or_high,
+            or_low=or_low,
+            position_text=position_text,
+            retest_text=retest_text,
+            phase=phase,
+        )
 
     def record_position_closed(self, symbol: str) -> None:
         """Call when a stop loss is hit externally."""

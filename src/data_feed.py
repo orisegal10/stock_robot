@@ -18,6 +18,7 @@ from ib_insync import IB, Stock, Ticker
 
 from src.config import config
 from src.utils import ET
+from src.connection import set_competing_session_callback
 
 
 @dataclass
@@ -68,12 +69,43 @@ class DataFeed:
         self._ib = ib
         self._symbols: Dict[str, SymbolData] = {}
         self._or_end: Optional[time] = self._compute_or_end()
+        self._competing_session: bool = False
+        set_competing_session_callback(self._on_competing_session)
 
     def _compute_or_end(self) -> time:
         start_str = config.get("trading", "start_time", default="09:30")
         duration = config.get("opening_range", "duration_minutes", default=15)
         start_dt = datetime.combine(datetime.now(ET).date(), time.fromisoformat(start_str))
         return (start_dt + timedelta(minutes=duration)).time()
+
+    def _on_competing_session(self, active: bool) -> None:
+        """Called by connection.py when error 10197 fires or a farm reconnects."""
+        import src.alerts as alerts
+        if active and not self._competing_session:
+            self._competing_session = True
+            logger.warning("Competing session active — switching to delayed data (15-min delay)")
+            alerts.notify(
+                "⚠️ *You are logged into IBKR* — bot switched to 15-min delayed data.\n"
+                "New entries paused. Log out to restore live data."
+            )
+            # Resubscribe all symbols with delayed data (regulatory snapshot = False, frozen = True)
+            for sym, data in self._symbols.items():
+                if data.ticker:
+                    self._ib.cancelMktData(data.ticker.contract)
+                contract = Stock(sym, "SMART", "USD")
+                data.ticker = self._ib.reqMktData(contract, "", False, True)  # frozen=True
+        elif not active and self._competing_session:
+            self._competing_session = False
+            logger.info("Competing session cleared — switching back to live data")
+            alerts.notify("✅ *Live data restored* — bot resumed normal trading scan.")
+            for sym, data in self._symbols.items():
+                if data.ticker:
+                    self._ib.cancelMktData(data.ticker.contract)
+                contract = Stock(sym, "SMART", "USD")
+                data.ticker = self._ib.reqMktData(contract, "", False, False)  # live
+
+    def is_competing_session(self) -> bool:
+        return self._competing_session
 
     def subscribe(self, symbols: List[str]) -> None:
         for sym in symbols:

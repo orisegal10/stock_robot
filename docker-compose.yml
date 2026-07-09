@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   ibgateway:
     build:
@@ -16,8 +14,21 @@ services:
       VNC_SERVER_PASSWORD: ibgateway
     ports:
       - "4002:4002"   # IB Gateway paper API port
-      - "4001:4001"   # IB Gateway live API port
       - "5900:5900"   # VNC for manual access if needed
+
+  ibgateway-live:
+    build:
+      context: .
+      dockerfile: Dockerfile.ibgateway
+    restart: unless-stopped
+    environment:
+      TWS_USERID: ${IBKR_USERNAME}
+      TWS_PASSWORD: ${IBKR_PASSWORD}
+      TRADING_MODE: live
+      TWS_ACCEPT_INCOMING: accept
+      READ_ONLY_API: "yes"
+      VNC_SERVER_PASSWORD: ibgateway
+    # no port exposed — Streamlit connects via internal Docker network only
 
   orb-bot:
     build: .
@@ -33,6 +44,23 @@ services:
       - ./data:/app/data
     command: python main.py
 
+  watchdog:
+    image: python:3.12-slim
+    restart: unless-stopped
+    depends_on:
+      - orb-bot
+    env_file:
+      - .env
+    environment:
+      WATCHDOG_CONTAINERS: "stock_robot-orb-bot-1"
+      WATCHDOG_MAX_RESTARTS: "5"
+      WATCHDOG_CHECK_INTERVAL: "60"
+    volumes:
+      - ./watchdog.py:/watchdog.py:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: >
+      sh -c "pip install requests docker --quiet && python /watchdog.py"
+
   streamlit-ui:
     build: .
     restart: unless-stopped
@@ -43,6 +71,9 @@ services:
       - ./universe:/app/universe
       - ./logs:/app/logs
       - ./data:/app/data
+      - ./ui:/app/ui
+      - ./my_portfolio.yaml:/app/my_portfolio.yaml
+      - ./google_credentials.json:/app/google_credentials.json:ro
     ports:
       - "8501:8501"
     command: streamlit run ui/streamlit_app.py --server.address 0.0.0.0 --server.port 8501

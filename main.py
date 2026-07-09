@@ -30,6 +30,7 @@ from src.risk_manager import RiskManager
 from src.execution import ExecutionManager
 import src.alerts as alerts
 import src.reporting as reporting
+import src.telemetry as telemetry
 
 
 def main() -> None:
@@ -139,7 +140,13 @@ def main() -> None:
                     or_data[sym] = {"high": h, "low": l}
             if or_data:
                 alerts.send_or_captured(or_data)
+                for sym, d in or_data.items():
+                    telemetry.record_or(sym, d["high"], d["low"])
                 or_reported = True
+
+        # Skip new entries when logged into IBKR (delayed data only)
+        if feed.is_competing_session():
+            return
 
         # Evaluate strategy for each symbol
         for sym, stock in symbols.items():
@@ -157,6 +164,12 @@ def main() -> None:
                 sym, price, or_high, or_low,
                 swing_high, stock.stop_loss_pct
             )
+
+            # Record what the bot sees this tick — for the Trading Log tab + Telegram
+            status = strategy.describe(sym, price, or_high, or_low)
+            if status is not None:
+                telemetry.record_snapshot(sym, price, or_high, or_low, status)
+                telemetry.maybe_notify(sym, price, status)
 
             if sig:
                 if sig.action == Action.LONG:
@@ -190,6 +203,7 @@ def main() -> None:
         strategy.reset_day()
         risk.reset_day()
         execution.reset_day()
+        telemetry.reset_day()
 
     # Schedule
     interval = config.get("trading", "update_interval_seconds", default=30)
