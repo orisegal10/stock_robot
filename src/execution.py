@@ -29,6 +29,7 @@ class OpenPosition:
     target_price: float
     entry_time: datetime = field(default_factory=datetime.now)
     trade: Optional[Trade] = None
+    stop_trade: Optional[Trade] = None   # resting protective stop, so we can cancel it on exit
 
 
 @dataclass
@@ -124,7 +125,7 @@ class ExecutionManager:
             actual_stop = round(fill_price * stop_loss_pct, 2)
 
             logger.info("Buy filled @ ${:.2f} — placing stop at ${:.2f}", fill_price, actual_stop)
-            self._ib.placeOrder(contract, StopOrder("SELL", shares, actual_stop))
+            stop_trade = self._ib.placeOrder(contract, StopOrder("SELL", shares, actual_stop))
 
             pos = OpenPosition(
                 symbol=signal.symbol,
@@ -133,6 +134,7 @@ class ExecutionManager:
                 stop_price=actual_stop,
                 target_price=signal.target_price,
                 trade=entry_trade,
+                stop_trade=stop_trade,
             )
             self._positions.append(pos)
             self._risk.record_position_opened()
@@ -159,6 +161,19 @@ class ExecutionManager:
     # SELL flow (target touched)
     # ------------------------------------------------------------------
 
+    def _cancel_stop(self, pos: OpenPosition) -> None:
+        """Cancel a position's resting protective stop so a target/EOD exit can't
+        leave a stray SELL order that would later open a short."""
+        if pos.stop_trade is None:
+            return
+        try:
+            self._ib.cancelOrder(pos.stop_trade.order)
+            logger.info("Cancelled resting stop for {} before exit", pos.symbol)
+        except Exception as exc:
+            logger.error("Failed to cancel resting stop for {}: {}", pos.symbol, exc)
+        finally:
+            pos.stop_trade = None
+
     def _handle_sell(self, signal: Signal) -> bool:
         pos = next((p for p in self._positions if p.symbol == signal.symbol), None)
         if pos is None:
@@ -168,6 +183,9 @@ class ExecutionManager:
         contract = Stock(signal.symbol, "SMART", "USD")
         try:
             self._ib.qualifyContracts(contract)
+            # Cancel the protective stop FIRST — otherwise after this sell fills the
+            # stale stop could trigger and sell shares we no longer own (going short).
+            self._cancel_stop(pos)
             self._ib.placeOrder(contract, MarketOrder("SELL", pos.shares))
 
             exit_price = signal.entry_price  # signal.entry_price = current price at touch
@@ -213,6 +231,8 @@ class ExecutionManager:
             try:
                 contract = Stock(pos.symbol, "SMART", "USD")
                 self._ib.qualifyContracts(contract)
+                # Cancel the protective stop first so it can't fire post-close and short us.
+                self._cancel_stop(pos)
                 self._ib.placeOrder(contract, MarketOrder("SELL", pos.shares))
                 logger.info("EOD close: SELL {} x {}", pos.shares, pos.symbol)
             except Exception as exc:

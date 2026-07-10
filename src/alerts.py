@@ -192,12 +192,20 @@ def send_day_summary(trades: int, net_pnl: float, wins: int) -> None:
 # ------------------------------------------------------------------
 
 async def request_approval(signal: Signal, shares: int, commission: float) -> bool:
+    live = not config.get("ibkr", "paper_trading", default=True)
+
     if not config.get("risk", "require_discord_approval", default=True):
+        if live:
+            logger.error("SAFETY: approval disabled but LIVE trading — rejecting {}", signal.symbol)
+            return False
         return True
 
     bot = _get_bot()
     if bot is None:
-        logger.warning("Telegram unavailable — auto-approving trade")
+        if live:
+            logger.error("SAFETY: Telegram unavailable and LIVE trading — rejecting {}", signal.symbol)
+            return False
+        logger.warning("Telegram unavailable — auto-approving trade (paper)")
         return True
 
     paper = "📄 PAPER" if config.get("ibkr", "paper_trading", default=True) else "💰 LIVE"
