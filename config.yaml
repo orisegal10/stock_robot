@@ -36,6 +36,12 @@ risk:
   min_gain_percent: 2.0         # skip trade if target is less than 2% above entry
   require_discord_approval: true
   approval_timeout_seconds: 60
+  # ── HARD safety caps (absolute last line of defense before a real order) ──
+  # Any BUY exceeding EITHER cap is rejected outright, regardless of sizing math.
+  # If paper_trading is false and either cap is unset, ALL buys are blocked.
+  # Testing-on-real defaults: keep tiny (a couple of dollars).
+  max_order_value_usd: 10       # reject any single order worth more than this
+  max_shares_per_order: 2       # reject any order for more shares than this
 
 # Global Stock Filters (applied on top of universe.csv)
 filters:

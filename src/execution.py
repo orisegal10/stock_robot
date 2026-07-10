@@ -73,7 +73,39 @@ class ExecutionManager:
 
         return self._place_buy(signal, shares)
 
+    def _safety_check(self, symbol: str, shares: int, price: float) -> bool:
+        """
+        Absolute caps enforced immediately before any BUY order, independent of
+        position-sizing math. Returns False (and blocks the order) if the order
+        would exceed a cap. On a LIVE account, missing caps also block the order.
+        """
+        max_order_usd = config.get("risk", "max_order_value_usd", default=None)
+        max_shares    = config.get("risk", "max_shares_per_order", default=None)
+        order_value   = shares * price
+
+        if not self._paper and (max_order_usd is None or max_shares is None):
+            logger.error(
+                "SAFETY: LIVE trading but risk.max_order_value_usd / max_shares_per_order "
+                "not set — refusing BUY {} ({} sh @ ${:.2f})", symbol, shares, price)
+            return False
+
+        if max_shares is not None and shares > max_shares:
+            logger.error("SAFETY BLOCK {}: {} shares exceeds max_shares_per_order={}",
+                         symbol, shares, max_shares)
+            return False
+
+        if max_order_usd is not None and order_value > max_order_usd:
+            logger.error("SAFETY BLOCK {}: order value ${:.2f} exceeds max_order_value_usd=${}",
+                         symbol, order_value, max_order_usd)
+            return False
+
+        return True
+
     def _place_buy(self, signal: Signal, shares: int) -> bool:
+        # ── HARD safety caps — absolute last line of defense before a real order ──
+        if not self._safety_check(signal.symbol, shares, signal.entry_price):
+            return False
+
         contract = Stock(signal.symbol, "SMART", "USD")
         try:
             self._ib.qualifyContracts(contract)
