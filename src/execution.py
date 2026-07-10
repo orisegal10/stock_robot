@@ -118,6 +118,25 @@ class ExecutionManager:
                 if entry_trade.orderStatus.filled >= shares:
                     break
 
+            # Verify the order actually filled — it may have been rejected/cancelled
+            # (e.g. IBKR security verification, insufficient buying power). Never
+            # claim a buy or place a stop for a position we don't hold.
+            filled_qty = int(entry_trade.orderStatus.filled or 0)
+            status = entry_trade.orderStatus.status
+            if filled_qty <= 0:
+                reason = entry_trade.log[-1].message if entry_trade.log else ""
+                logger.error("BUY {} NOT executed (status={}) — {}",
+                             signal.symbol, status, reason or "order did not fill")
+                alerts.notify(
+                    f"⚠️ *{signal.symbol} buy NOT executed* — {status}. "
+                    f"{reason or 'Order did not fill.'}"
+                )
+                return False
+            if filled_qty < shares:
+                logger.warning("{} partially filled {}/{} — sizing stop to filled qty",
+                               signal.symbol, filled_qty, shares)
+                shares = filled_qty
+
             fill_price = entry_trade.orderStatus.avgFillPrice or signal.entry_price
             if not fill_price or fill_price != fill_price:  # nan check
                 fill_price = signal.entry_price

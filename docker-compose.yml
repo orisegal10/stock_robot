@@ -22,11 +22,12 @@ services:
       dockerfile: Dockerfile.ibgateway
     restart: unless-stopped
     environment:
-      TWS_USERID: ${IBKR_USERNAME}
-      TWS_PASSWORD: ${IBKR_PASSWORD}
+      # REAL account — separate credentials from the paper gateway (set IBKR_LIVE_* in .env)
+      TWS_USERID: ${IBKR_LIVE_USERNAME}
+      TWS_PASSWORD: ${IBKR_LIVE_PASSWORD}
       TRADING_MODE: live
       TWS_ACCEPT_INCOMING: accept
-      READ_ONLY_API: "yes"
+      READ_ONLY_API: "no"
       VNC_SERVER_PASSWORD: ibgateway
     # no port exposed — Streamlit connects via internal Docker network only
 
