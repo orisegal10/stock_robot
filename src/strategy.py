@@ -133,6 +133,7 @@ class StrategyEngine:
 
         # --- Step 2: Validate swing high exists and gain >= min_gain_pct ---
         if swing_high is None:
+            logger.debug("{} breakout confirmed but no swing high recorded yet — waiting", symbol)
             return None
 
         if or_high <= 0:
@@ -141,6 +142,9 @@ class StrategyEngine:
         # Entry will be approximately current price on retest
         potential_gain = ((swing_high - current_price) / current_price) * 100
         if potential_gain < self._min_gain_pct:
+            logger.debug("{} no entry — potential gain {:.2f}% < min {:.2f}% "
+                         "(swing {:.2f} vs price {:.2f})",
+                         symbol, potential_gain, self._min_gain_pct, swing_high, current_price)
             return None   # not worth trading
 
         # --- Step 3: Retest detection (1 min timeframe) ---

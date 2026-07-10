@@ -127,6 +127,8 @@ def main() -> None:
             alerts.notify("✅ Data feed recovered — resuming normal trading scan.")
 
         if latency_skip_until is not None and datetime.now() < latency_skip_until:
+            logger.debug("scan skipped — in latency-skip window until {}",
+                         latency_skip_until.strftime("%H:%M:%S"))
             return
 
         now_time = datetime.now(ET).time()
@@ -146,15 +148,22 @@ def main() -> None:
 
         # Skip new entries when logged into IBKR (delayed data only)
         if feed.is_competing_session():
+            logger.debug("scan skipped — competing IBKR session (delayed data, new entries paused)")
             return
 
         # Evaluate strategy for each symbol
         for sym, stock in symbols.items():
+            latency = feed.get_latency_seconds(sym)
+
             if not feed.or_captured(sym):
+                logger.debug("{} — OR not captured yet (price={}, last_tick={})",
+                             sym, feed.get_price(sym),
+                             f"{latency:.0f}s ago" if latency is not None else "never")
                 continue
 
             price = feed.get_price(sym)
             if price is None:
+                logger.debug("{} — no price/ticks yet (OR captured but feed silent)", sym)
                 continue
 
             or_high, or_low = feed.get_or(sym)
@@ -168,6 +177,13 @@ def main() -> None:
             # Record what the bot sees this tick — for the Trading Log tab + Telegram
             status = strategy.describe(sym, price, or_high, or_low)
             if status is not None:
+                logger.debug(
+                    "TRACE {} ${:.2f} OR[{:.2f}-{:.2f}] swing={} phase={} — {} (tick {} ago)",
+                    sym, price, status.or_high, status.or_low,
+                    f"{swing_high:.2f}" if swing_high else "None",
+                    status.phase, status.retest_text,
+                    f"{latency:.0f}s" if latency is not None else "never",
+                )
                 telemetry.record_snapshot(sym, price, or_high, or_low, status)
                 telemetry.maybe_notify(sym, price, status)
 
