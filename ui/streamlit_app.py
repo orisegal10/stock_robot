@@ -75,59 +75,130 @@ div[data-testid="stTab"] button { font-size: 14px; font-weight: 600; }
 
 # ── Data loaders ──────────────────────────────────────────────────────────────
 
-@st.cache_data(ttl=60)
-def load_live_portfolio() -> pd.DataFrame:
-    portfolio_file = Path("my_portfolio.yaml")
-    if not portfolio_file.exists():
-        return pd.DataFrame({"_error": ["my_portfolio.yaml not found"]})
+# IBKR symbol -> yfinance symbol for non-US listings (yfinance needs the suffix)
+YF_OVERRIDE = {"CSPX": "CSPX.L"}
 
-    import yaml
-    data = yaml.safe_load(portfolio_file.read_text())
-    holdings = data.get("holdings", [])
-    cash = float(data.get("cash", 0))
-    initial = float(data.get("initial_investment", 0))
-    if not holdings:
-        return pd.DataFrame()
 
-    yf_symbols = [h.get("yf_ticker", h["symbol"]) for h in holdings]
-
-    # Single batch download for all prices — much faster than per-ticker calls
+def _price_table(symbols: list) -> dict:
+    """Batch price lookup -> {symbol: (price, day_pct)}."""
+    yf_syms = [YF_OVERRIDE.get(s, s) for s in symbols]
     try:
-        raw = yf.download(yf_symbols, period="2d", interval="1d", auto_adjust=True, progress=False)
+        raw = yf.download(yf_syms, period="2d", interval="1d", auto_adjust=True, progress=False)
         closes = raw["Close"]
     except Exception:
         closes = pd.DataFrame()
-
-    rows = []
-    for h in holdings:
-        sym      = h["symbol"]
-        yf_sym   = h.get("yf_ticker", sym)
-        qty      = h["shares"]
-        avg_cost = h["avg_cost"]
-
+    out = {}
+    for s in symbols:
+        ys = YF_OVERRIDE.get(s, s)
         try:
-            col   = closes[yf_sym] if yf_sym in closes.columns else closes.get(sym)
-            vals  = col.dropna().values if col is not None else []
+            col = closes[ys] if ys in getattr(closes, "columns", []) else closes.get(s)
+            vals = col.dropna().values if col is not None else []
             price = float(vals[-1]) if len(vals) >= 1 else 0.0
-            prev  = float(vals[-2]) if len(vals) >= 2 else price
-            pct   = ((price - prev) / prev * 100) if prev else 0.0
+            prev = float(vals[-2]) if len(vals) >= 2 else price
+            pct = ((price - prev) / prev * 100) if prev else 0.0
         except Exception:
             price, pct = 0.0, 0.0
+        out[s] = (price, pct)
+    return out
 
-        rows.append({
-            "Ticker":   sym,
-            "Qty":      qty,
-            "Avg Cost": round(avg_cost, 2),
-            "Price":    round(price, 2),
-            "Day %":    round(pct, 2),
-            "Total":    round(qty * price, 2),
-            "Profit $": round((price - avg_cost) * qty, 2),
-            "Profit %": round(((price - avg_cost) / avg_cost * 100) if avg_cost else 0, 2),
-        })
+
+def _holding_row(sym, qty, avg_cost, price, pct) -> dict:
+    return {
+        "Ticker": sym, "Qty": int(qty), "Avg Cost": round(avg_cost, 2),
+        "Price": round(price, 2), "Day %": round(pct, 2),
+        "Total": round(qty * price, 2),
+        "Profit $": round((price - avg_cost) * qty, 2),
+        "Profit %": round(((price - avg_cost) / avg_cost * 100) if avg_cost else 0, 2),
+    }
+
+
+def _live_from_yaml() -> pd.DataFrame:
+    """Fallback: build the live table from the last snapshot in my_portfolio.yaml."""
+    import yaml
+    pf = Path("my_portfolio.yaml")
+    if not pf.exists():
+        return pd.DataFrame({"_error": ["my_portfolio.yaml not found"]})
+    data = yaml.safe_load(pf.read_text()) or {}
+    holdings = data.get("holdings", [])
+    df = pd.DataFrame()
+    if holdings:
+        prices = _price_table([h["symbol"] for h in holdings])
+        rows = [_holding_row(h["symbol"], h["shares"], h["avg_cost"], *prices[h["symbol"]])
+                for h in holdings]
+        df = pd.DataFrame(rows).sort_values("Day %", ascending=False).reset_index(drop=True)
+    df.attrs["cash"] = float(data.get("cash", 0))
+    df.attrs["initial"] = float(data.get("initial_investment", 0))
+    df.attrs["source"] = "snapshot"
+    return df
+
+
+def _write_yaml_snapshot(rows: list, cash: float, initial: float) -> None:
+    """Persist a fresh snapshot so the offline fallback stays current."""
+    import yaml
+    pf = Path("my_portfolio.yaml")
+    yf_map = {}
+    if pf.exists():
+        try:
+            for h in (yaml.safe_load(pf.read_text()) or {}).get("holdings", []):
+                if h.get("yf_ticker"):
+                    yf_map[h["symbol"]] = h["yf_ticker"]
+        except Exception:
+            pass
+    out = {"cash": round(cash, 2), "initial_investment": initial, "holdings": []}
+    for r in rows:
+        row = {"symbol": r["Ticker"], "shares": int(r["Qty"]), "avg_cost": r["Avg Cost"]}
+        if r["Ticker"] in yf_map:
+            row["yf_ticker"] = yf_map[r["Ticker"]]
+        out["holdings"].append(row)
+    try:
+        pf.write_text("# Snapshot cached from the last successful live read (Refresh Live).\n"
+                      + yaml.safe_dump(out, sort_keys=False))
+    except Exception:
+        pass
+
+
+@st.cache_data(ttl=60)
+def load_live_portfolio() -> pd.DataFrame:
+    """Read real holdings live from the IBKR gateway; fall back to the last
+    snapshot (my_portfolio.yaml) if the gateway is logged out/offline."""
+    import yaml
+    pf = Path("my_portfolio.yaml")
+    initial = 0.0
+    if pf.exists():
+        try:
+            initial = float((yaml.safe_load(pf.read_text()) or {}).get("initial_investment", 0))
+        except Exception:
+            initial = 0.0
+
+    ib = IB()
+    try:
+        ib.connect("ibgateway-live", 4003, clientId=13, timeout=8, readonly=True)
+    except Exception:
+        return _live_from_yaml()          # gateway offline -> last snapshot
+
+    try:
+        positions = [p for p in ib.positions() if p.contract.secType == "STK" and p.position != 0]
+        cash = 0.0
+        for v in ib.accountValues():
+            if v.tag == "TotalCashValue" and v.currency == "USD":
+                cash = float(v.value); break
+    except Exception:
+        return _live_from_yaml()
+    finally:
+        if ib.isConnected():
+            ib.disconnect()
+
+    if not positions:
+        df = pd.DataFrame()
+        df.attrs.update(cash=cash, initial=initial, source="live")
+        return df
+
+    prices = _price_table([p.contract.symbol for p in positions])
+    rows = [_holding_row(p.contract.symbol, p.position, p.avgCost, *prices[p.contract.symbol])
+            for p in positions]
+    _write_yaml_snapshot(rows, cash, initial)   # keep the offline fallback fresh
     df = pd.DataFrame(rows).sort_values("Day %", ascending=False).reset_index(drop=True)
-    # stash cash + initial so render_portfolio can use them
-    df.attrs["cash"]    = cash
-    df.attrs["initial"] = initial
+    df.attrs.update(cash=cash, initial=initial, source="live")
     return df
 
 
@@ -497,8 +568,15 @@ with tab_home:
         st.cache_data.clear()
         st.rerun()
 
-    with st.spinner("Loading live positions..."):
+    with st.spinner("Reading live positions from IBKR..."):
         live_df = load_live_portfolio()
+
+    _src = live_df.attrs.get("source", "")
+    if _src == "live":
+        st.caption("🟢 Live from IBKR account U25029941")
+    elif _src == "snapshot":
+        st.caption("⚠️ Live gateway offline — showing last snapshot. "
+                   "Reconnect the gateway and approve the 2FA, then press Refresh Live.")
     render_portfolio(live_df, "live")
 
     st.markdown("<br>", unsafe_allow_html=True)
